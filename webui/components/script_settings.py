@@ -9,6 +9,7 @@ from loguru import logger
 from app.config import config
 from app.models.schema import VideoClipParams
 from app.utils import utils, check_script
+from webui.tools.generate_movie_commentary import generate_movie_commentary_script
 from webui.tools.generate_script_docu import generate_script_docu
 from webui.tools.generate_script_short import generate_script_short
 from webui.tools.generate_short_summary import generate_script_short_sunmmary
@@ -33,6 +34,8 @@ def render_script_panel(tr):
         if script_path == "auto":
             # 画面解说
             render_video_details(tr)
+        elif script_path == "movie_commentary_auto":
+            render_movie_commentary_options(tr)
         elif script_path == "short":
             # 短剧混剪
             render_short_generate_options(tr)
@@ -52,6 +55,7 @@ def render_script_file(tr, params):
     script_list = [
         (tr("None"), ""),
         (tr("Auto Generate"), "auto"),
+        (tr("Movie Commentary (Auto)"), "movie_commentary_auto"),
         (tr("Short Generate"), "short"),
         (tr("Short Drama Summary"), "summary"),
         (tr("Upload Script"), "upload_script")
@@ -234,6 +238,35 @@ def render_video_details(tr):
     return video_theme, custom_prompt
 
 
+def render_movie_commentary_options(tr):
+    """电影解说 脚本生成配置"""
+    render_video_details(tr)
+
+    st.session_state.setdefault('movie_commentary_skip_seconds', 0)
+    st.session_state.setdefault('movie_commentary_threshold', 30)
+
+    advanced_cols = st.columns(2)
+    with advanced_cols[0]:
+        skip_seconds = st.number_input(
+            tr("Skip the first few seconds"),
+            min_value=0,
+            value=st.session_state['movie_commentary_skip_seconds'],
+            step=1,
+            key="movie_commentary_skip_seconds_input"
+        )
+    with advanced_cols[1]:
+        threshold = st.number_input(
+            tr("Difference threshold"),
+            min_value=1,
+            value=st.session_state['movie_commentary_threshold'],
+            step=1,
+            key="movie_commentary_threshold_input"
+        )
+
+    st.session_state['movie_commentary_skip_seconds'] = int(skip_seconds)
+    st.session_state['movie_commentary_threshold'] = int(threshold)
+
+
 def short_drama_summary(tr):
     """短剧解说 渲染视频主题和提示词"""
     # 检查是否已经处理过字幕文件
@@ -303,6 +336,8 @@ def render_script_buttons(tr, params):
     # 生成/加载按钮
     if script_path == "auto":
         button_name = tr("Generate Video Script")
+    elif script_path == "movie_commentary_auto":
+        button_name = tr("Generate Movie Commentary Script")
     elif script_path == "short":
         button_name = tr("Generate Short Video Script")
     elif script_path == "summary":
@@ -316,6 +351,8 @@ def render_script_buttons(tr, params):
         if script_path == "auto":
             # 执行纪录片视频脚本生成（视频无字幕无配音）
             generate_script_docu(params)
+        elif script_path == "movie_commentary_auto":
+            generate_movie_commentary_script(tr, params)
         elif script_path == "short":
             # 执行 短剧混剪 脚本生成
             custom_clips = st.session_state.get('custom_clips')
