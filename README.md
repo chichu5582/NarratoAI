@@ -99,7 +99,7 @@ _**1. NarratoAI 是一款完全免费的软件，近期在社交媒体(抖音,B�
 
 ## 快速启动 🚀
 
-### 方式一：macos Docker 部署（macos 推荐）
+### 方式一：macOS Docker 部署（macOS 推荐）
 ```bash
 # 1. 克隆项目
 git clone https://github.com/linyqh/NarratoAI.git
@@ -111,10 +111,27 @@ docker compose up -d
 # 3. 访问应用
 # 浏览器打开 http://localhost:8501
 ```
-### 方式二：整合包（Windows 推荐）
+### 方式二：Windows Docker 一键部署脚本（Windows 推荐）
+```powershell
+# 1. 克隆项目
+git clone https://github.com/linyqh/NarratoAI.git
+cd NarratoAI
+
+# 2. 运行 Windows 一键部署脚本
+powershell -ExecutionPolicy Bypass -File .\deploy_windows.ps1
+
+# 可选：需要强制重新构建镜像时
+powershell -ExecutionPolicy Bypass -File .\deploy_windows.ps1 -Build [-NoCache]
+
+# 3. 访问应用
+# 浏览器打开 http://localhost:8501
+```
+> 首次运行脚本会自动检测 Docker/Docker Compose、复制 `config.example.toml` 为 `config.toml`，并在服务启动后输出常用运维命令。
+
+### 方式三：整合包（Windows 推荐）
 > *关注微信公众号 **NarratoAI 助手** 右下角菜单栏获取下载链接*
 
-### 方式三：本地运行
+### 方式四：本地运行
 ```bash
 # 1. 克隆项目
 git clone https://github.com/linyqh/NarratoAI.git
