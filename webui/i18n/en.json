@@ -9,6 +9,8 @@
     "Generate Video Script and Keywords": "Click to use AI to generate **Video Script** and **Video Keywords** based on the **subject**",
     "Auto Detect": "Auto Detect",
     "Auto Generate": "Auto Generate",
+    "Movie Commentary (Auto)": "Movie Commentary (Auto)",
+    "Generate Movie Commentary Script": "Generate Movie Commentary Script",
     "Video Script": "Video Script (:blue[①Optional, use AI to generate ②Proper punctuation helps in generating subtitles])",
     "Save Script": "Save Script",
     "Crop Video": "Crop Video",
@@ -86,6 +88,10 @@
     "Hide Log": "Hide Log",
     "Upload Local Files": "Upload Local Files",
     "File Uploaded Successfully": "File Uploaded Successfully",
-    "Frame Interval (seconds)": "Frame Interval (seconds) (More keyframes consume more tokens)"
+    "Frame Interval (seconds)": "Frame Interval (seconds) (More keyframes consume more tokens)",
+    "Movie Commentary Script Generated Successfully": "Movie commentary script generated successfully",
+    "Movie Commentary Script Saved To": "Script saved to",
+    "Failed to generate movie commentary script": "Failed to generate movie commentary script",
+    "Please select a video file first": "Please select a video file first"
   }
 }
