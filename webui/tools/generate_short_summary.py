@@ -134,7 +134,7 @@ def parse_and_fix_json(json_string):
         return None
 
 
-def generate_script_short_sunmmary(params, subtitle_path, video_theme, temperature):
+def generate_script_short_summary(params, subtitle_path, video_theme, temperature):
     """
     生成 短剧解说 视频脚本
     要求: 提供高质量短剧字幕

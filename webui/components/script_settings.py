@@ -12,7 +12,7 @@ from app.utils import utils, check_script
 from webui.tools.generate_movie_commentary import generate_movie_commentary_script
 from webui.tools.generate_script_docu import generate_script_docu
 from webui.tools.generate_script_short import generate_script_short
-from webui.tools.generate_short_summary import generate_script_short_sunmmary
+from webui.tools.generate_short_summary import generate_script_short_summary
 
 
 def render_script_panel(tr):
@@ -362,7 +362,7 @@ def render_script_buttons(tr, params):
             subtitle_path = st.session_state.get('subtitle_path')
             video_theme = st.session_state.get('video_theme')
             temperature = st.session_state.get('temperature')
-            generate_script_short_sunmmary(params, subtitle_path, video_theme, temperature)
+            generate_script_short_summary(params, subtitle_path, video_theme, temperature)
         else:
             load_script(tr, script_path)
 
