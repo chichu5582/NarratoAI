@@ -54,7 +54,8 @@ class ScriptGenerator:
             keyframe_files = await self._extract_keyframes(
                 video_path,
                 skip_seconds,
-                threshold
+                threshold,
+                frame_interval=frame_interval_input,
             )
 
             normalized_provider = (vision_llm_provider or "gemini").lower()
@@ -89,10 +90,21 @@ class ScriptGenerator:
         self,
         video_path: str,
         skip_seconds: int,
-        threshold: int
+        threshold: int,
+        frame_interval: float = 5.0,
+        use_hw_accel: bool = True,
     ) -> List[str]:
-        """提取视频关键帧"""
-        video_hash = utils.md5(video_path + str(os.path.getmtime(video_path)))
+        """提取视频关键帧。
+
+        Args:
+            video_path: 视频文件路径。
+            skip_seconds: 预留参数（兼容旧接口）。
+            threshold: 预留参数（兼容旧接口）。
+            frame_interval: 关键帧提取的时间间隔（秒）。
+            use_hw_accel: 是否启用硬件加速。
+        """
+        cache_key = f"{video_path}:{os.path.getmtime(video_path)}:{frame_interval}:{int(use_hw_accel)}"
+        video_hash = utils.md5(cache_key)
         video_keyframes_dir = os.path.join(self.keyframes_dir, video_hash)
         
         # 检查缓存
@@ -113,8 +125,8 @@ class ScriptGenerator:
             processor = video_processor.VideoProcessor(video_path)
             processor.process_video_pipeline(
                 output_dir=video_keyframes_dir,
-                skip_seconds=skip_seconds,
-                threshold=threshold
+                interval_seconds=frame_interval,
+                use_hw_accel=use_hw_accel,
             )
 
             for filename in sorted(os.listdir(video_keyframes_dir)):
