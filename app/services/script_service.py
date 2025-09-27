@@ -5,7 +5,7 @@ import asyncio
 import requests
 from app.utils import video_processor
 from loguru import logger
-from typing import List, Dict, Any, Callable
+from typing import List, Dict, Any, Callable, Optional
 
 from app.utils import utils, gemini_analyzer, video_processor
 from app.utils.script_generator import ScriptProcessor
@@ -49,6 +49,32 @@ class ScriptGenerator:
             progress_callback = lambda p, m: None
             
         try:
+            normalized_provider, vision_config_key = self._normalize_provider(vision_llm_provider)
+
+            if normalized_provider in {"gemini", "gemini(openai)"}:
+                vision_settings = self._validate_provider_config(
+                    vision_config_key,
+                    category="vision",
+                    original_name=normalized_provider,
+                )
+                text_provider_raw = config.app.get("text_llm_provider", "gemini")
+                text_provider, text_config_key = self._normalize_provider(text_provider_raw)
+                text_settings = self._validate_provider_config(
+                    text_config_key,
+                    category="text",
+                    original_name=text_provider,
+                )
+            elif normalized_provider == "narratoapi":
+                vision_settings = self._validate_provider_config(
+                    "narratoapi",
+                    category="vision",
+                    original_name=normalized_provider,
+                )
+                text_provider = None
+                text_settings = None
+            else:
+                raise ValueError(f"Unsupported vision provider: {vision_llm_provider}")
+
             # 提取关键帧
             progress_callback(10, "正在提取关键帧...")
             keyframe_files = await self._extract_keyframes(
@@ -58,8 +84,6 @@ class ScriptGenerator:
                 frame_interval=frame_interval_input,
             )
 
-            normalized_provider = (vision_llm_provider or "gemini").lower()
-
             if normalized_provider in {"gemini", "gemini(openai)"}:
                 script = await self._process_with_gemini(
                     keyframe_files,
@@ -67,21 +91,22 @@ class ScriptGenerator:
                     custom_prompt,
                     vision_batch_size,
                     progress_callback,
-                    normalized_provider
+                    normalized_provider,
+                    vision_settings,
+                    text_provider,
+                    text_settings,
                 )
-            elif normalized_provider == "narratoapi":
+            else:
                 script = await self._process_with_narrato(
                     keyframe_files,
                     video_theme,
                     custom_prompt,
                     vision_batch_size,
-                    progress_callback
+                    progress_callback,
                 )
-            else:
-                raise ValueError(f"Unsupported vision provider: {vision_llm_provider}")
-                
+
             return json.loads(script) if isinstance(script, str) else script
-            
+
         except Exception as e:
             logger.exception("Generate script failed")
             raise
@@ -148,21 +173,44 @@ class ScriptGenerator:
         custom_prompt: str,
         vision_batch_size: int,
         progress_callback: Callable[[float, str], None],
-        vision_provider: str
+        vision_provider: str,
+        vision_settings: Optional[Dict[str, Any]] = None,
+        text_provider: Optional[str] = None,
+        text_settings: Optional[Dict[str, Any]] = None,
     ) -> str:
         """使用Gemini处理视频帧"""
         progress_callback(30, "正在初始化视觉分析器...")
 
-        # 获取Gemini配置
-        vision_api_key = config.app.get("vision_gemini_api_key")
-        vision_model = config.app.get("vision_gemini_model_name")
-        vision_base_url = config.app.get("vision_gemini_base_url")
+        normalized_provider, vision_config_key = self._normalize_provider(vision_provider)
 
-        if not vision_api_key or not vision_model:
-            raise ValueError("未配置 Gemini API Key 或者模型")
+        if vision_settings is None:
+            vision_settings = self._validate_provider_config(
+                vision_config_key,
+                category="vision",
+                original_name=normalized_provider,
+            )
+
+        if text_provider is None:
+            text_provider_raw = config.app.get("text_llm_provider", "gemini")
+        else:
+            text_provider_raw = text_provider
+
+        normalized_text_provider, text_config_key = self._normalize_provider(text_provider_raw)
+
+        if text_settings is None:
+            text_settings = self._validate_provider_config(
+                text_config_key,
+                category="text",
+                original_name=normalized_text_provider,
+            )
+
+        # 获取视觉模型配置
+        vision_api_key = vision_settings.get("api_key")
+        vision_model = vision_settings.get("model_name")
+        vision_base_url = vision_settings.get("base_url")
 
         # 根据提供商类型选择合适的分析器
-        provider = (vision_provider or "gemini").lower()
+        provider = normalized_provider or "gemini"
 
         if provider == 'gemini(openai)':
             # 使用OpenAI兼容的Gemini代理
@@ -240,14 +288,13 @@ class ScriptGenerator:
 
         progress_callback(90, "正在生成文案...")
         
-        # 获取文本生��配置
-        text_provider = config.app.get('text_llm_provider', 'gemini').lower()
-        text_api_key = config.app.get(f'text_{text_provider}_api_key')
-        text_model = config.app.get(f'text_{text_provider}_model_name')
-        text_base_url = config.app.get(f'text_{text_provider}_base_url')
+        # 获取文本生成配置
+        text_api_key = text_settings.get('api_key') if text_settings else None
+        text_model = text_settings.get('model_name') if text_settings else None
+        text_base_url = text_settings.get('base_url') if text_settings else None
 
         # 根据提供商类型选择合适的处理器
-        if text_provider == 'gemini(openai)':
+        if normalized_text_provider == 'gemini(openai)':
             # 使用OpenAI兼容的Gemini代理
             from app.utils.script_generator import GeminiOpenAIGenerator
             generator = GeminiOpenAIGenerator(
@@ -374,10 +421,92 @@ class ScriptGenerator:
             except Exception as e:
                 logger.warning(f"清理临时文件失败: {str(e)}")
 
+    def _normalize_provider(self, provider: Optional[str]) -> tuple[str, str]:
+        """标准化模型提供商名称，返回显示名称和配置键名"""
+        if not provider:
+            return "gemini", "gemini"
+
+        normalized = str(provider).strip().lower()
+
+        if not normalized:
+            return "gemini", "gemini"
+
+        alias_map = {
+            "gemini(openai)": ("gemini(openai)", "gemini"),
+            "gemini-openai": ("gemini(openai)", "gemini"),
+            "gemini_openai": ("gemini(openai)", "gemini"),
+        }
+
+        if normalized in alias_map:
+            return alias_map[normalized]
+
+        config_key = normalized.replace(" ", "").replace("-", "_")
+        config_key = config_key.replace("(", "").replace(")", "")
+        return normalized, config_key
+
+    def _validate_provider_config(
+        self,
+        provider_key: str,
+        *,
+        category: str,
+        original_name: str,
+    ) -> Dict[str, Any]:
+        """验证并返回指定模型提供商的配置。"""
+
+        if category not in {"vision", "text"}:
+            raise ValueError("category 必须是 'vision' 或 'text'")
+
+        if provider_key == "narratoapi":
+            missing: List[str] = []
+            api_key = config.app.get("narrato_api_key")
+            api_url = config.app.get("narrato_api_url")
+
+            if not api_key:
+                missing.append("app.narrato_api_key")
+            if not api_url:
+                missing.append("app.narrato_api_url")
+
+            if missing:
+                raise ValueError(self._format_missing_config_error(original_name, missing))
+
+            return {"api_key": api_key, "api_url": api_url}
+
+        prefix = "vision" if category == "vision" else "text"
+
+        api_key_name = f"{prefix}_{provider_key}_api_key"
+        model_name_key = f"{prefix}_{provider_key}_model_name"
+        base_url_key = f"{prefix}_{provider_key}_base_url"
+
+        missing: List[str] = []
+        api_key = config.app.get(api_key_name)
+        model_name = config.app.get(model_name_key)
+        base_url = config.app.get(base_url_key)
+
+        if not api_key:
+            missing.append(f"app.{api_key_name}")
+        if not model_name:
+            missing.append(f"app.{model_name_key}")
+
+        if missing:
+            raise ValueError(self._format_missing_config_error(original_name, missing))
+
+        return {
+            "api_key": api_key,
+            "model_name": model_name,
+            "base_url": base_url,
+        }
+
+    def _format_missing_config_error(self, provider: str, missing_keys: List[str]) -> str:
+        readable = ", ".join(missing_keys)
+        return (
+            f"{provider} 配置缺失: {readable}。"
+            "请在 config.toml 的对应 app 节中补全后重试。"
+        )
+
     def _get_batch_files(
-        self, 
-        keyframe_files: List[str], 
-        result: Dict[str, Any], 
+        self,
+        keyframe_files: List[str],
+        result: Dict[str, Any],
         batch_size: int
     ) -> List[str]:
         """获取当前批次的图片文件"""
