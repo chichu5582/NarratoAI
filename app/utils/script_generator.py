@@ -506,8 +506,8 @@ class ScriptProcessor:
         
         Returns:
             int: 估算的合适字数
-                  基于经验公式: 每0.35秒可以说一个字
-                  例如: 10秒可以说约28个字 (10/0.35≈28.57)
+                  基于经验公式: 每0.4秒可以说一个字
+                  例如: 10秒可以说约25个字 (10/0.4=25)
         """
         try:
             start_str, end_str = time_range.split('-')
@@ -544,7 +544,7 @@ class ScriptProcessor:
             # 计算持续时间(秒)
             duration = end_seconds - start_seconds
             
-            # 根据经验公式计算字数: 每0.5秒一个字
+            # 根据经验公式计算字数: 每0.4秒一个字
             word_count = int(duration / 0.4)
             
             # 确保字数在合理范围内
