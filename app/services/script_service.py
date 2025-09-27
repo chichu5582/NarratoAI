@@ -5,7 +5,7 @@ import asyncio
 import requests
 from app.utils import video_processor
 from loguru import logger
-from typing import List, Dict, Any, Callable
+from typing import List, Dict, Any, Callable, Optional, Tuple
 
 from app.utils import utils, gemini_analyzer, video_processor
 from app.utils.script_generator import ScriptProcessor
@@ -53,6 +53,7 @@ class ScriptGenerator:
             progress_callback(10, "正在提取关键帧...")
             keyframe_files = await self._extract_keyframes(
                 video_path,
+                frame_interval_input,
                 skip_seconds,
                 threshold
             )
@@ -88,46 +89,119 @@ class ScriptGenerator:
     async def _extract_keyframes(
         self,
         video_path: str,
+        frame_interval_input: int,
         skip_seconds: int,
         threshold: int
     ) -> List[str]:
         """提取视频关键帧"""
         video_hash = utils.md5(video_path + str(os.path.getmtime(video_path)))
         video_keyframes_dir = os.path.join(self.keyframes_dir, video_hash)
-        
-        # 检查缓存
-        keyframe_files = []
-        if os.path.exists(video_keyframes_dir):
+
+        def collect_keyframes() -> List[str]:
+            if not os.path.exists(video_keyframes_dir):
+                return []
+            files: List[str] = []
             for filename in sorted(os.listdir(video_keyframes_dir)):
                 if filename.endswith('.jpg'):
-                    keyframe_files.append(os.path.join(video_keyframes_dir, filename))
-                    
-            if keyframe_files:
-                logger.info(f"Using cached keyframes: {video_keyframes_dir}")
-                return keyframe_files
-                
+                    files.append(os.path.join(video_keyframes_dir, filename))
+            return files
+
+        # 检查缓存
+        keyframe_files = collect_keyframes()
+        if keyframe_files:
+            logger.info(f"Using cached keyframes: {video_keyframes_dir}")
+            return self._filter_keyframes(keyframe_files, skip_seconds, threshold)
+
         # 提取新的关键帧
         os.makedirs(video_keyframes_dir, exist_ok=True)
-        
+
         try:
             processor = video_processor.VideoProcessor(video_path)
+            interval_seconds = self._normalize_frame_interval(frame_interval_input)
             processor.process_video_pipeline(
                 output_dir=video_keyframes_dir,
-                skip_seconds=skip_seconds,
-                threshold=threshold
+                interval_seconds=interval_seconds,
+                use_hw_accel=True
             )
 
-            for filename in sorted(os.listdir(video_keyframes_dir)):
-                if filename.endswith('.jpg'):
-                    keyframe_files.append(os.path.join(video_keyframes_dir, filename))
-                    
-            return keyframe_files
-            
+            keyframe_files = collect_keyframes()
+            return self._filter_keyframes(keyframe_files, skip_seconds, threshold)
+
         except Exception as e:
             if os.path.exists(video_keyframes_dir):
                 import shutil
                 shutil.rmtree(video_keyframes_dir)
             raise
+
+    @staticmethod
+    def _normalize_frame_interval(frame_interval_input: int) -> float:
+        """将帧提取间隔规范化为有效的秒数。"""
+        try:
+            interval = float(frame_interval_input)
+        except (TypeError, ValueError):
+            interval = 5.0
+
+        if interval <= 0:
+            return 5.0
+        return interval
+
+    def _filter_keyframes(
+        self,
+        keyframe_files: List[str],
+        skip_seconds: int,
+        threshold: int
+    ) -> List[str]:
+        """根据跳过秒数和阈值过滤关键帧列表。"""
+        if not keyframe_files:
+            return []
+
+        filtered: List[str] = []
+        last_frame_number: Optional[int] = None
+
+        for file_path in keyframe_files:
+            frame_number, timestamp = self._parse_keyframe_metadata(file_path)
+
+            if skip_seconds > 0 and timestamp is not None and timestamp < skip_seconds:
+                continue
+
+            if (
+                threshold > 0
+                and last_frame_number is not None
+                and frame_number is not None
+                and frame_number - last_frame_number < threshold
+            ):
+                continue
+
+            filtered.append(file_path)
+            if frame_number is not None:
+                last_frame_number = frame_number
+
+        return filtered
+
+    @staticmethod
+    def _parse_keyframe_metadata(file_path: str) -> Tuple[Optional[int], Optional[float]]:
+        """从关键帧文件名中提取帧号和时间戳（秒）。"""
+        filename = os.path.basename(file_path)
+        parts = filename.split('_')
+
+        frame_number: Optional[int] = None
+        timestamp_seconds: Optional[float] = None
+
+        if len(parts) >= 3:
+            frame_part = parts[1]
+            time_part_with_ext = parts[2]
+            if frame_part.isdigit():
+                frame_number = int(frame_part)
+
+            time_part = time_part_with_ext.split('.')[0]
+            if len(time_part) == 9 and time_part.isdigit():
+                hours = int(time_part[0:2])
+                minutes = int(time_part[2:4])
+                seconds = int(time_part[4:6])
+                milliseconds = int(time_part[6:9])
+                timestamp_seconds = hours * 3600 + minutes * 60 + seconds + milliseconds / 1000.0
+
+        return frame_number, timestamp_seconds
             
     async def _process_with_gemini(
         self,
