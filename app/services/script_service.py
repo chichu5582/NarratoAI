@@ -1,9 +1,8 @@
 import os
 import json
 import time
-import asyncio
+
 import requests
-from app.utils import video_processor
 from loguru import logger
 from typing import List, Dict, Any, Callable
 
@@ -29,21 +28,21 @@ class ScriptGenerator:
         vision_llm_provider: str = "gemini",
         progress_callback: Callable[[float, str], None] = None
     ) -> List[Dict[Any, Any]]:
-        """
-        生成视频脚本的核心逻辑
-        
+        """生成视频脚本的核心逻辑。
+
         Args:
-            video_path: 视频文件路径
-            video_theme: 视频主题
-            custom_prompt: 自定义提示词
-            skip_seconds: 跳过开始的秒数
-            threshold: 差异���值
-            vision_batch_size: 视觉处理批次大小
-            vision_llm_provider: 视觉模型提供商
-            progress_callback: 进度回调函数
-            
+            video_path: 视频文件路径。
+            video_theme: 视频主题，用于指导文案风格。
+            custom_prompt: 自定义提示词，会追加到默认提示词后。
+            frame_interval_input: 抽帧间隔（秒），影响关键帧提取频率。
+            skip_seconds: 跳过开始的秒数。
+            threshold: 差异阈值，用于判定关键帧是否保存。
+            vision_batch_size: 视觉处理批次大小。
+            vision_llm_provider: 视觉模型提供商标识。
+            progress_callback: 进度回调函数。
+
         Returns:
-            List[Dict]: 生成的视频脚本
+            List[Dict]: 生成的视频脚本。
         """
         if progress_callback is None:
             progress_callback = lambda p, m: None
@@ -52,20 +51,23 @@ class ScriptGenerator:
             # 提取关键帧
             progress_callback(10, "正在提取关键帧...")
             keyframe_files = await self._extract_keyframes(
-                video_path, 
+                video_path,
                 skip_seconds,
                 threshold
             )
-            
-            if vision_llm_provider == "gemini":
+
+            normalized_provider = (vision_llm_provider or "gemini").lower()
+
+            if normalized_provider in {"gemini", "gemini(openai)"}:
                 script = await self._process_with_gemini(
                     keyframe_files,
                     video_theme,
                     custom_prompt,
                     vision_batch_size,
-                    progress_callback
+                    progress_callback,
+                    normalized_provider
                 )
-            elif vision_llm_provider == "narratoapi":
+            elif normalized_provider == "narratoapi":
                 script = await self._process_with_narrato(
                     keyframe_files,
                     video_theme,
@@ -132,11 +134,12 @@ class ScriptGenerator:
         video_theme: str,
         custom_prompt: str,
         vision_batch_size: int,
-        progress_callback: Callable[[float, str], None]
+        progress_callback: Callable[[float, str], None],
+        vision_provider: str
     ) -> str:
         """使用Gemini处理视频帧"""
         progress_callback(30, "正在初始化视觉分析器...")
-        
+
         # 获取Gemini配置
         vision_api_key = config.app.get("vision_gemini_api_key")
         vision_model = config.app.get("vision_gemini_model_name")
@@ -146,7 +149,9 @@ class ScriptGenerator:
             raise ValueError("未配置 Gemini API Key 或者模型")
 
         # 根据提供商类型选择合适的分析器
-        if vision_provider == 'gemini(openai)':
+        provider = (vision_provider or "gemini").lower()
+
+        if provider == 'gemini(openai)':
             # 使用OpenAI兼容的Gemini代理
             from app.utils.gemini_openai_analyzer import GeminiOpenAIAnalyzer
             analyzer = GeminiOpenAIAnalyzer(
@@ -185,7 +190,7 @@ class ScriptGenerator:
             batch_files = self._get_batch_files(keyframe_files, result, vision_batch_size)
             first_timestamp, last_timestamp, _ = self._get_batch_timestamps(batch_files, prev_batch_files)
             
-            # 添加带时间戳的分��结果
+            # 添加带时间戳的分析结果
             frame_analysis += f"\n=== {first_timestamp}-{last_timestamp} ===\n"
             frame_analysis += result['response']
             frame_analysis += "\n"
@@ -222,11 +227,16 @@ class ScriptGenerator:
 
         progress_callback(90, "正在生成文案...")
         
-        # 获取文本生��配置
-        text_provider = config.app.get('text_llm_provider', 'gemini').lower()
-        text_api_key = config.app.get(f'text_{text_provider}_api_key')
-        text_model = config.app.get(f'text_{text_provider}_model_name')
-        text_base_url = config.app.get(f'text_{text_provider}_base_url')
+        # 获取文本生成配置
+        raw_text_provider = config.app.get('text_llm_provider') or 'gemini'
+        text_provider = raw_text_provider.strip().lower()
+        provider_key = {
+            'gemini(openai)': 'gemini',
+        }.get(text_provider, text_provider)
+
+        text_api_key = config.app.get(f'text_{provider_key}_api_key')
+        text_model = config.app.get(f'text_{provider_key}_model_name')
+        text_base_url = config.app.get(f'text_{provider_key}_base_url')
 
         # 根据提供商类型选择合适的处理器
         if text_provider == 'gemini(openai)':
@@ -316,7 +326,7 @@ class ScriptGenerator:
             task_data = response.json()
             task_id = task_data["data"].get('task_id')
             if not task_id:
-                raise Exception(f"无效的API��应: {response.text}")
+                raise Exception(f"无效的API响应: {response.text}")
             
             progress_callback(50, "正在等待分析结果...")
             retry_count = 0
@@ -431,5 +441,5 @@ class ScriptGenerator:
         first_timestamp = format_timestamp(first_time)
         last_timestamp = format_timestamp(last_time)
         timestamp_range = f"{first_timestamp}-{last_timestamp}"
-        
+
         return first_timestamp, last_timestamp, timestamp_range

@@ -108,7 +108,7 @@ class GeminiOpenAIAnalyzer:
     async def analyze_images(self,
                            images: List[Union[str, Path, PIL.Image.Image]],
                            prompt: str,
-                           batch_size: int = 10) -> List[str]:
+                           batch_size: int = 10) -> List[Dict[str, Union[int, str]]]:
         """
         分析图片并返回结果
 
@@ -118,7 +118,7 @@ class GeminiOpenAIAnalyzer:
             batch_size: 批处理大小
 
         Returns:
-            分析结果列表
+            包含每个批次分析结果的字典列表
         """
         logger.info(f"开始分析 {len(images)} 张图片，使用OpenAI兼容Gemini代理")
         
@@ -145,24 +145,40 @@ class GeminiOpenAIAnalyzer:
             raise ValueError("没有有效的图片可以分析")
 
         # 分批处理
-        results = []
+        results: List[Dict[str, Union[int, str]]] = []
         total_batches = (len(loaded_images) + batch_size - 1) // batch_size
-        
-        for i in tqdm(range(0, len(loaded_images), batch_size), 
-                     desc="分析图片批次", total=total_batches):
-            batch = loaded_images[i:i + batch_size]
-            
+
+        for batch_index, start in enumerate(
+            tqdm(
+                range(0, len(loaded_images), batch_size),
+                desc="分析图片批次",
+                total=total_batches,
+            )
+        ):
+            batch = loaded_images[start:start + batch_size]
+
             try:
                 response = await self._generate_content_with_retry(prompt, batch)
-                results.append(response.text)
-                
+                results.append({
+                    "batch_index": batch_index,
+                    "images_processed": len(batch),
+                    "response": response.text,
+                    "model_used": self.model_name,
+                })
+
                 # 添加延迟以避免API限流
-                if i + batch_size < len(loaded_images):
+                if start + batch_size < len(loaded_images):
                     await asyncio.sleep(1)
-                    
+
             except Exception as e:
-                logger.error(f"分析批次 {i//batch_size + 1} 失败: {str(e)}")
-                results.append(f"分析失败: {str(e)}")
+                error_msg = f"分析批次 {batch_index + 1} 失败: {str(e)}"
+                logger.error(error_msg)
+                results.append({
+                    "batch_index": batch_index,
+                    "images_processed": len(batch),
+                    "error": error_msg,
+                    "model_used": self.model_name,
+                })
 
         logger.info(f"完成图片分析，共处理 {len(results)} 个批次")
         return results
@@ -170,7 +186,7 @@ class GeminiOpenAIAnalyzer:
     def analyze_images_sync(self,
                            images: List[Union[str, Path, PIL.Image.Image]],
                            prompt: str,
-                           batch_size: int = 10) -> List[str]:
+                           batch_size: int = 10) -> List[Dict[str, Union[int, str]]]:
         """
         同步版本的图片分析方法
         """

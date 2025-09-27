@@ -151,50 +151,6 @@ class GeminiGenerator(BaseGenerator):
             "stopSequences": []
         }
 
-
-class GeminiOpenAIGenerator(BaseGenerator):
-    """OpenAI兼容的Gemini代理生成器实现"""
-    def __init__(self, model_name: str, api_key: str, prompt: str, base_url: str = None):
-        super().__init__(model_name, api_key, prompt)
-
-        if not base_url:
-            raise ValueError("OpenAI兼容的Gemini代理必须提供base_url")
-
-        self.base_url = base_url.rstrip('/')
-
-        # 使用OpenAI兼容接口
-        from openai import OpenAI
-        self.client = OpenAI(
-            api_key=api_key,
-            base_url=base_url
-        )
-
-        # OpenAI兼容接口参数
-        self.default_params = {
-            "temperature": self.default_params["temperature"],
-            "max_tokens": 4000,
-            "stream": False
-        }
-
-    def _generate(self, messages: list, params: dict) -> any:
-        """实现OpenAI兼容Gemini代理的生成逻辑"""
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model_name,
-                messages=messages,
-                **params
-            )
-            return response
-        except Exception as e:
-            logger.error(f"OpenAI兼容Gemini代理生成错误: {str(e)}")
-            raise
-
-    def _process_response(self, response: any) -> str:
-        """处理OpenAI兼容接口的响应"""
-        if not response or not response.choices:
-            raise ValueError("OpenAI兼容Gemini代理返回无效响应")
-        return response.choices[0].message.content.strip()
-
     def _generate(self, messages: list, params: dict) -> any:
         """实现原生Gemini API的生成逻辑"""
         max_retries = 3
@@ -311,6 +267,50 @@ class GeminiOpenAIGenerator(BaseGenerator):
         if not response or not response.text:
             raise ValueError("原生Gemini API返回无效响应")
         return response.text.strip()
+
+
+class GeminiOpenAIGenerator(BaseGenerator):
+    """OpenAI兼容的Gemini代理生成器实现"""
+    def __init__(self, model_name: str, api_key: str, prompt: str, base_url: str = None):
+        super().__init__(model_name, api_key, prompt)
+
+        if not base_url:
+            raise ValueError("OpenAI兼容的Gemini代理必须提供base_url")
+
+        self.base_url = base_url.rstrip('/')
+
+        # 使用OpenAI兼容接口
+        from openai import OpenAI
+        self.client = OpenAI(
+            api_key=api_key,
+            base_url=base_url
+        )
+
+        # OpenAI兼容接口参数
+        self.default_params = {
+            "temperature": self.default_params["temperature"],
+            "max_tokens": 4000,
+            "stream": False
+        }
+
+    def _generate(self, messages: list, params: dict) -> any:
+        """实现OpenAI兼容Gemini代理的生成逻辑"""
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=messages,
+                **params
+            )
+            return response
+        except Exception as e:
+            logger.error(f"OpenAI兼容Gemini代理生成错误: {str(e)}")
+            raise
+
+    def _process_response(self, response: any) -> str:
+        """处理OpenAI兼容接口的响应"""
+        if not response or not response.choices:
+            raise ValueError("OpenAI兼容Gemini代理返回无效响应")
+        return response.choices[0].message.content.strip()
 
 
 class QwenGenerator(BaseGenerator):
