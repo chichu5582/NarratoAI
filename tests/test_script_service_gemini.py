@@ -16,12 +16,15 @@ class ProcessWithGeminiTests(unittest.IsolatedAsyncioTestCase):
 
         class DummyAnalyzer:
             instantiated = False
+            init_kwargs = None
 
             def __init__(self, model_name, api_key, base_url):
                 DummyAnalyzer.instantiated = True
-                self.model_name = model_name
-                self.api_key = api_key
-                self.base_url = base_url
+                DummyAnalyzer.init_kwargs = {
+                    "model_name": model_name,
+                    "api_key": api_key,
+                    "base_url": base_url,
+                }
 
             async def analyze_images(self, images, prompt, batch_size):
                 self.images = images
@@ -76,9 +79,78 @@ class ProcessWithGeminiTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertTrue(DummyAnalyzer.instantiated)
+        self.assertEqual(
+            DummyAnalyzer.init_kwargs,
+            {
+                "model_name": "test-model",
+                "api_key": "test-key",
+                "base_url": "https://vision.example.com",
+            },
+        )
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["picture"], "analysis")
         self.assertGreaterEqual(len(progress_events), 3)
+
+    async def test_native_variant_uses_native_analyzer(self):
+        generator = ScriptGenerator()
+        fake_frames = ["/tmp/frame_000001_00:00:00,000.jpg"]
+
+        class RecordingVisionAnalyzer:
+            instantiated = False
+
+            def __init__(self, model_name, api_key, base_url):
+                RecordingVisionAnalyzer.instantiated = True
+                self.model_name = model_name
+                self.api_key = api_key
+                self.base_url = base_url
+
+            async def analyze_images(self, images, prompt, batch_size):
+                return [
+                    {"batch_index": 0, "response": "native"},
+                ]
+
+        class DummyProcessor:
+            def __init__(self, *_, **__):
+                pass
+
+            def process_frames(self, frame_content_list):
+                return frame_content_list
+
+        with patch.dict(
+            config.app,
+            {
+                "vision_gemini_api_key": "native-key",
+                "vision_gemini_model_name": "native-model",
+                "vision_gemini_base_url": "https://native.example.com",
+                "vision_analysis_prompt": "describe",
+                "text_llm_provider": "gemini",
+                "text_gemini_api_key": "text-key",
+                "text_gemini_model_name": "gemini-pro",
+                "text_gemini_base_url": "https://text.example.com",
+            },
+            clear=False,
+        ), patch(
+            "app.services.script_service.gemini_analyzer.VisionAnalyzer",
+            RecordingVisionAnalyzer,
+        ), patch(
+            "app.utils.gemini_openai_analyzer.GeminiOpenAIAnalyzer",
+            side_effect=AssertionError("OpenAI analyzer should not be used"),
+        ), patch(
+            "app.services.script_service.ScriptProcessor",
+            DummyProcessor,
+        ):
+            result = await generator._process_with_gemini(
+                keyframe_files=fake_frames,
+                video_theme="Adventure",
+                custom_prompt="",
+                vision_batch_size=1,
+                progress_callback=lambda *_: None,
+                vision_provider="gemini",
+            )
+
+        self.assertTrue(RecordingVisionAnalyzer.instantiated)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["picture"], "native")
 
     async def test_openai_text_provider_uses_gemini_credentials(self):
         generator = ScriptGenerator()
