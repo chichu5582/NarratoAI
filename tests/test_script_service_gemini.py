@@ -1,4 +1,7 @@
+import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from app.config import config
@@ -6,6 +9,56 @@ from app.services.script_service import ScriptGenerator
 
 
 class ProcessWithGeminiTests(unittest.IsolatedAsyncioTestCase):
+    async def test_extract_keyframes_passes_supported_video_processor_kwargs(self):
+        """Ensure only supported kwargs are passed to the video processor."""
+
+        async def run_extraction(generator: ScriptGenerator, video_path: Path):
+            captured_kwargs = {}
+
+            with patch(
+                "app.services.script_service.video_processor.VideoProcessor"
+            ) as MockProcessor:
+                instance = MockProcessor.return_value
+
+                def fake_process_video_pipeline(*args, **kwargs):
+                    captured_kwargs.clear()
+                    captured_kwargs.update(kwargs)
+                    os.makedirs(kwargs["output_dir"], exist_ok=True)
+                    frame_path = Path(kwargs["output_dir"]) / "frame_000001.jpg"
+                    frame_path.write_bytes(b"")
+
+                instance.process_video_pipeline.side_effect = fake_process_video_pipeline
+
+                keyframes = await generator._extract_keyframes(
+                    str(video_path),
+                    skip_seconds=0,
+                    threshold=30,
+                    frame_interval=2,
+                    use_hw_accel=False,
+                )
+
+            self.assertTrue(keyframes)
+            return captured_kwargs
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            temp_path = Path(tmp_dir)
+            video_path = temp_path / "video.mp4"
+            video_path.write_bytes(b"fake video content")
+
+            with patch(
+                "app.services.script_service.utils.temp_dir",
+                return_value=tmp_dir,
+            ):
+                generator = ScriptGenerator()
+
+            kwargs = await run_extraction(generator, video_path)
+
+        expected_keys = {"output_dir", "interval_seconds", "use_hw_accel"}
+        self.assertTrue(kwargs)
+        self.assertEqual(set(kwargs), expected_keys)
+        self.assertEqual(kwargs["interval_seconds"], 2)
+        self.assertFalse(kwargs["use_hw_accel"])
+
     async def test_openai_variant_uses_openai_analyzer(self):
         generator = ScriptGenerator()
         fake_frames = [
