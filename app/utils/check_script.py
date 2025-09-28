@@ -59,12 +59,20 @@ def check_format(script_content: str) -> Dict[str, Any]:
 
             # 验证 timestamp 字段格式
             timestamp_pattern = r'^\d{2}:\d{2}:\d{2},\d{3}-\d{2}:\d{2}:\d{2},\d{3}$'
-            if not isinstance(clip['timestamp'], str) or not re.match(timestamp_pattern, clip['timestamp']):
+            timestamp_value = clip['timestamp']
+            if isinstance(timestamp_value, str):
+                timestamp_value = timestamp_value.strip()
+            if (
+                not isinstance(clip['timestamp'], str)
+                or not re.match(timestamp_pattern, timestamp_value)
+            ):
                 return {
                     'success': False,
                     'message': f'第{i+1}个片段的timestamp格式错误',
                     'details': f'正确格式: "HH:MM:SS,mmm-HH:MM:SS,mmm"，示例: "00:00:00,600-00:00:07,559"'
                 }
+            # 使用去除首尾空白后的时间戳，避免因无意义空格导致的验证失败
+            clip['timestamp'] = timestamp_value
 
             # 验证 picture 字段
             if not isinstance(clip['picture'], str) or not clip['picture'].strip():
