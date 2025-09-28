@@ -11,7 +11,7 @@
 
 import json
 import re
-from typing import Dict, Any, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 from loguru import logger
 
 from .base import OutputFormat
@@ -162,17 +162,19 @@ class PromptOutputValidator:
         if not isinstance(item["_id"], int) or item["_id"] <= 0:
             raise PromptValidationError(f"第 {index + 1} 个片段的 '_id' 必须是正整数")
             
-        # 验证timestamp格式
+        # 验证并规范化 timestamp
         timestamp = item["timestamp"]
         if not isinstance(timestamp, str):
             raise PromptValidationError(f"第 {index + 1} 个片段的 'timestamp' 必须是字符串")
-            
-        # 验证时间戳格式 (HH:MM:SS,mmm-HH:MM:SS,mmm)
-        timestamp_pattern = r'^\d{2}:\d{2}:\d{2},\d{3}-\d{2}:\d{2}:\d{2},\d{3}$'
-        if not re.match(timestamp_pattern, timestamp):
+
+        try:
+            normalized_timestamp = PromptOutputValidator._normalize_timestamp_range(timestamp)
+        except ValueError:
             raise PromptValidationError(
                 f"第 {index + 1} 个片段的时间戳格式错误，应为 'HH:MM:SS,mmm-HH:MM:SS,mmm'"
-            )
+            ) from None
+
+        item["timestamp"] = normalized_timestamp
             
         # 验证文本字段不为空
         for field in ["picture", "narration"]:
@@ -212,7 +214,78 @@ class PromptOutputValidator:
             raise PromptValidationError(
                 f"第 {index + 1} 个剧情点的时间戳格式错误"
             )
-            
+
+    @staticmethod
+    def _normalize_timestamp_range(timestamp: str) -> str:
+        """将各种合法时间格式归一化为 'HH:MM:SS,mmm-HH:MM:SS,mmm'"""
+
+        if not isinstance(timestamp, str):
+            raise ValueError("时间戳必须是字符串")
+
+        sanitized = timestamp.strip().replace("–", "-").replace("—", "-")
+        if "-" not in sanitized:
+            raise ValueError("时间戳缺少分隔符")
+
+        start_raw, end_raw = [part.strip() for part in sanitized.split("-", 1)]
+        start_formatted, start_seconds = PromptOutputValidator._normalize_single_timestamp(start_raw)
+        end_formatted, end_seconds = PromptOutputValidator._normalize_single_timestamp(end_raw)
+
+        if end_seconds <= start_seconds:
+            raise ValueError("结束时间必须大于开始时间")
+
+        return f"{start_formatted}-{end_formatted}"
+
+    @staticmethod
+    def _normalize_single_timestamp(value: str) -> Tuple[str, float]:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("时间戳不能为空")
+
+        sanitized = value.strip().replace("，", ",")
+        normalized = sanitized.replace(",", ".")
+        components = normalized.split(":")
+
+        try:
+            if len(components) == 3:
+                hours = int(components[0])
+                minutes = int(components[1])
+                seconds = float(components[2])
+            elif len(components) == 2:
+                hours = 0
+                minutes = int(components[0])
+                seconds = float(components[1])
+            elif len(components) == 1:
+                hours = 0
+                minutes = 0
+                seconds = float(components[0])
+            else:
+                raise ValueError
+        except ValueError as exc:
+            raise ValueError("时间戳格式错误") from exc
+
+        if hours < 0 or minutes < 0 or seconds < 0:
+            raise ValueError("时间戳不能为负数")
+
+        total_seconds = hours * 3600 + minutes * 60 + seconds
+        formatted = PromptOutputValidator._format_seconds(total_seconds)
+        return formatted, total_seconds
+
+    @staticmethod
+    def _format_seconds(seconds: float) -> str:
+        if seconds < 0:
+            raise ValueError("时间戳不能为负数")
+
+        whole_seconds = int(seconds)
+        milliseconds = int(round((seconds - whole_seconds) * 1000))
+        if milliseconds == 1000:
+            milliseconds = 0
+            whole_seconds += 1
+
+        hours = whole_seconds // 3600
+        minutes = (whole_seconds % 3600) // 60
+        secs = whole_seconds % 60
+
+        return f"{hours:02d}:{minutes:02d}:{secs:02d},{milliseconds:03d}"
+
     @staticmethod
     def validate_by_format(output: str, format_type: OutputFormat, schema: Dict[str, Any] = None) -> Any:
         """
