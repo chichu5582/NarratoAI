@@ -126,12 +126,90 @@ class ProcessWithGeminiTests(unittest.IsolatedAsyncioTestCase):
                 vision_batch_size=2,
                 progress_callback=progress_callback,
                 vision_provider="gemini(openai)",
+                vision_settings={
+                    "api_key": "test-key",
+                    "model_name": "test-model",
+                    "base_url": "https://vision.example.com",
+                },
+                text_provider="gemini",
+                text_settings={
+                    "api_key": "text-key",
+                    "model_name": "gemini-pro",
+                    "base_url": "https://text.example.com",
+                },
             )
 
         self.assertTrue(DummyAnalyzer.instantiated)
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["picture"], "analysis")
         self.assertGreaterEqual(len(progress_events), 3)
+
+    async def test_generate_script_with_registered_provider(self):
+        generator = ScriptGenerator()
+
+        fake_frames = [
+            "/tmp/frame_000001_00:00:00,000.jpg",
+            "/tmp/frame_000002_00:00:05,000.jpg",
+            "/tmp/frame_000003_00:00:10,000.jpg",
+            "/tmp/frame_000004_00:00:15,000.jpg",
+        ]
+
+        async def fake_extract_keyframes(*args, **kwargs):
+            return fake_frames
+
+        captured_kwargs = {}
+
+        async def fake_analyze_images(*args, **kwargs):
+            captured_kwargs.update(kwargs)
+            return [
+                "Batch 1 analysis",
+                "Batch 2 analysis",
+            ]
+
+        class DummyProcessor:
+            def __init__(self, *args, **kwargs):
+                self.kwargs = kwargs
+
+            def process_frames(self, frame_content_list):
+                self.frames = frame_content_list
+                return frame_content_list
+
+        with patch.dict(
+            config.app,
+            {
+                "vision_siliconflow_api_key": "vision-key",
+                "vision_siliconflow_model_name": "Qwen/Qwen2.5-VL-32B-Instruct",
+                "vision_siliconflow_base_url": "https://api.siliconflow.cn/v1",
+                "vision_analysis_prompt": "describe",
+                "text_llm_provider": "gemini",
+                "text_gemini_api_key": "text-key",
+                "text_gemini_model_name": "gemini-pro",
+                "text_gemini_base_url": "https://text.example.com",
+            },
+            clear=False,
+        ), patch.object(
+            ScriptGenerator,
+            "_extract_keyframes",
+            side_effect=fake_extract_keyframes,
+        ), patch(
+            "app.services.script_service.UnifiedLLMService.analyze_images",
+            side_effect=fake_analyze_images,
+        ), patch(
+            "app.services.script_service.ScriptProcessor",
+            DummyProcessor,
+        ):
+            result = await generator.generate_script(
+                video_path="/tmp/video.mp4",
+                video_theme="Travel",
+                custom_prompt="",
+                vision_batch_size=2,
+                vision_llm_provider="siliconflow",
+            )
+
+        self.assertEqual(captured_kwargs.get("provider"), "siliconflow")
+        self.assertEqual(captured_kwargs.get("batch_size"), 2)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0]["picture"], "Batch 1 analysis")
 
 
 if __name__ == "__main__":
