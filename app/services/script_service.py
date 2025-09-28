@@ -1,9 +1,7 @@
 import os
 import json
 import time
-import asyncio
 import requests
-from app.utils import video_processor
 from loguru import logger
 from typing import List, Dict, Any, Callable, Optional
 
@@ -381,7 +379,7 @@ class ScriptGenerator:
             task_data = response.json()
             task_id = task_data["data"].get('task_id')
             if not task_id:
-                raise Exception(f"无效的API��应: {response.text}")
+                raise Exception(f"无效的API响应: {response.text}")
             
             progress_callback(50, "正在等待分析结果...")
             retry_count = 0
