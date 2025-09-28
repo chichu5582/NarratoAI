@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Callable, Optional
 from app.utils import utils, gemini_analyzer, video_processor
 from app.utils.script_generator import ScriptProcessor
 from app.config import config
+from app.services.llm import LLMServiceManager
 
 
 class ScriptGenerator:
@@ -71,7 +72,29 @@ class ScriptGenerator:
                 text_provider = None
                 text_settings = None
             else:
-                raise ValueError(f"Unsupported vision provider: {vision_llm_provider}")
+                available_providers = {
+                    provider.lower() for provider in LLMServiceManager.list_vision_providers()
+                }
+
+                if vision_config_key not in available_providers:
+                    raise ValueError(f"Unsupported vision provider: {vision_llm_provider}")
+
+                vision_settings = self._validate_provider_config(
+                    vision_config_key,
+                    category="vision",
+                    original_name=normalized_provider,
+                )
+
+                text_provider_raw = config.app.get(
+                    "text_llm_provider",
+                    normalized_provider,
+                )
+                text_provider, text_config_key = self._normalize_provider(text_provider_raw)
+                text_settings = self._validate_provider_config(
+                    text_config_key,
+                    category="text",
+                    original_name=text_provider,
+                )
 
             # 提取关键帧
             progress_callback(10, "正在提取关键帧...")
@@ -94,13 +117,25 @@ class ScriptGenerator:
                     text_provider,
                     text_settings,
                 )
-            else:
+            elif normalized_provider == "narratoapi":
                 script = await self._process_with_narrato(
                     keyframe_files,
                     video_theme,
                     custom_prompt,
                     vision_batch_size,
                     progress_callback,
+                )
+            else:
+                script = await self._process_with_registered_provider(
+                    keyframe_files,
+                    video_theme,
+                    custom_prompt,
+                    vision_batch_size,
+                    progress_callback,
+                    vision_config_key,
+                    text_provider,
+                    text_settings,
+                    vision_settings.get("model_name") if vision_settings else None,
                 )
 
             return json.loads(script) if isinstance(script, str) else script
@@ -235,46 +270,140 @@ class ScriptGenerator:
             batch_size=vision_batch_size
         )
 
+        return self._generate_script_from_results(
+            results,
+            keyframe_files,
+            vision_batch_size,
+            video_theme,
+            custom_prompt,
+            progress_callback,
+            normalized_text_provider,
+            text_settings,
+        )
+
+    async def _process_with_registered_provider(
+        self,
+        keyframe_files: List[str],
+        video_theme: str,
+        custom_prompt: str,
+        vision_batch_size: int,
+        progress_callback: Callable[[float, str], None],
+        vision_provider_key: str,
+        normalized_text_provider: str,
+        text_settings: Dict[str, Any],
+        vision_model_name: Optional[str] = None,
+    ) -> str:
+        """使用统一注册的视觉模型提供商处理关键帧"""
+
+        progress_callback(30, "正在初始化视觉分析器...")
+
+        vision_provider = LLMServiceManager.get_vision_provider(vision_provider_key)
+
+        try:
+            raw_results = await vision_provider.analyze_images(
+                images=keyframe_files,
+                prompt=config.app.get('vision_analysis_prompt'),
+                batch_size=vision_batch_size,
+            )
+        except Exception:
+            logger.exception("视觉模型处理关键帧失败")
+            raise
+
+        model_used = vision_model_name or getattr(vision_provider, "model_name", vision_provider_key)
+        normalized_results: List[Dict[str, Any]] = []
+
+        for index, raw in enumerate(raw_results or []):
+            batch_files = keyframe_files[index * vision_batch_size:(index + 1) * vision_batch_size]
+            entry: Dict[str, Any] = {
+                "batch_index": index,
+                "images_processed": len(batch_files),
+                "model_used": model_used,
+            }
+
+            if isinstance(raw, dict):
+                if raw.get("error"):
+                    entry["error"] = raw["error"]
+                if raw.get("response"):
+                    entry["response"] = raw["response"]
+                elif raw.get("result"):
+                    entry["response"] = raw["result"]
+                elif raw.get("text"):
+                    entry["response"] = raw["text"]
+                elif raw.get("content"):
+                    entry["response"] = raw["content"]
+            else:
+                if raw is not None:
+                    entry["response"] = str(raw)
+
+            if not str(entry.get("response", "")).strip():
+                entry.setdefault("error", "视觉分析结果为空")
+
+            normalized_results.append(entry)
+
+        if not normalized_results:
+            raise ValueError("视觉模型未返回任何分析结果")
+
+        return self._generate_script_from_results(
+            normalized_results,
+            keyframe_files,
+            vision_batch_size,
+            video_theme,
+            custom_prompt,
+            progress_callback,
+            normalized_text_provider,
+            text_settings,
+        )
+
+    def _generate_script_from_results(
+        self,
+        results: List[Dict[str, Any]],
+        keyframe_files: List[str],
+        vision_batch_size: int,
+        video_theme: str,
+        custom_prompt: str,
+        progress_callback: Callable[[float, str], None],
+        normalized_text_provider: str,
+        text_settings: Optional[Dict[str, Any]],
+    ) -> str:
+        """根据视觉分析结果生成脚本"""
+
         progress_callback(60, "正在整理分析结果...")
-        
-        # 合并所有批次的分析结果
+
         frame_analysis = ""
-        prev_batch_files = None
+        prev_batch_files: Optional[List[str]] = None
 
         for result in results:
             if 'error' in result:
                 logger.warning(f"批次 {result['batch_index']} 处理出现警告: {result['error']}")
                 continue
-                
+
             batch_files = self._get_batch_files(keyframe_files, result, vision_batch_size)
             first_timestamp, last_timestamp, _ = self._get_batch_timestamps(batch_files, prev_batch_files)
-            
-            # 添加带时间戳的分��结果
+
             frame_analysis += f"\n=== {first_timestamp}-{last_timestamp} ===\n"
-            frame_analysis += result['response']
+            frame_analysis += result.get('response', '')
             frame_analysis += "\n"
-            
+
             prev_batch_files = batch_files
-        
+
         if not frame_analysis.strip():
             raise Exception("未能生成有效的帧分析结果")
-        
+
         progress_callback(70, "正在生成脚本...")
 
-        # 构建帧内容列表
-        frame_content_list = []
+        frame_content_list: List[Dict[str, Any]] = []
         prev_batch_files = None
 
         for result in results:
             if 'error' in result:
                 continue
-            
+
             batch_files = self._get_batch_files(keyframe_files, result, vision_batch_size)
             _, _, timestamp_range = self._get_batch_timestamps(batch_files, prev_batch_files)
-            
+
             frame_content = {
                 "timestamp": timestamp_range,
-                "picture": result['response'],
+                "picture": result.get('response', ''),
                 "narration": "",
                 "OST": 2
             }
@@ -285,16 +414,17 @@ class ScriptGenerator:
             raise Exception("没有有效的帧内容可以处理")
 
         progress_callback(90, "正在生成文案...")
-        
-        # 获取文本生成配置
+
         text_api_key = text_settings.get('api_key') if text_settings else None
         text_model = text_settings.get('model_name') if text_settings else None
         text_base_url = text_settings.get('base_url') if text_settings else None
 
-        # 根据提供商类型选择合适的处理器
+        if not text_model:
+            raise ValueError("文本模型配置缺失，无法生成脚本")
+
         if normalized_text_provider == 'gemini(openai)':
-            # 使用OpenAI兼容的Gemini代理
             from app.utils.script_generator import GeminiOpenAIGenerator
+
             generator = GeminiOpenAIGenerator(
                 model_name=text_model,
                 api_key=text_api_key,
@@ -310,7 +440,6 @@ class ScriptGenerator:
             )
             processor.generator = generator
         else:
-            # 使用标准处理器（包括原生Gemini）
             processor = ScriptProcessor(
                 model_name=text_model,
                 api_key=text_api_key,
@@ -429,18 +558,28 @@ class ScriptGenerator:
         if not normalized:
             return "gemini", "gemini"
 
+        # 归一化提供商名称，便于匹配不同的书写格式
+        canonical = normalized.replace(" ", "").replace("-", "_")
+        canonical_no_paren = canonical.replace("(", "").replace(")", "")
+
         alias_map = {
             "gemini(openai)": ("gemini(openai)", "gemini"),
-            "gemini-openai": ("gemini(openai)", "gemini"),
             "gemini_openai": ("gemini(openai)", "gemini"),
+            "geminiopenai": ("gemini(openai)", "gemini"),
+            "siliconflow": ("siliconflow", "siliconflow"),
+            "silicon_flow": ("siliconflow", "siliconflow"),
+            "siliconflowopenai": ("siliconflow", "siliconflow"),
+            "qwenvl": ("qwenvl", "qwenvl"),
+            "qwen_vl": ("qwenvl", "qwenvl"),
+            "narratoapi": ("narratoapi", "narratoapi"),
+            "narrato_api": ("narratoapi", "narratoapi"),
         }
 
-        if normalized in alias_map:
-            return alias_map[normalized]
+        for candidate in (canonical, canonical_no_paren):
+            if candidate in alias_map:
+                return alias_map[candidate]
 
-        config_key = normalized.replace(" ", "").replace("-", "_")
-        config_key = config_key.replace("(", "").replace(")", "")
-        return normalized, config_key
+        return canonical_no_paren, canonical_no_paren
 
     def _validate_provider_config(
         self,
