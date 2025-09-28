@@ -49,7 +49,7 @@ class ScriptGenerator:
         try:
             normalized_provider, vision_config_key = self._normalize_provider(vision_llm_provider)
 
-            if normalized_provider in {"gemini", "gemini(openai)"}:
+            if normalized_provider in {"gemini", "gemini(openai)", "siliconflow"}:
                 vision_settings = self._validate_provider_config(
                     vision_config_key,
                     category="vision",
@@ -90,6 +90,17 @@ class ScriptGenerator:
                     vision_batch_size,
                     progress_callback,
                     normalized_provider,
+                    vision_settings,
+                    text_provider,
+                    text_settings,
+                )
+            elif normalized_provider == "siliconflow":
+                script = await self._process_with_siliconflow(
+                    keyframe_files,
+                    video_theme,
+                    custom_prompt,
+                    vision_batch_size,
+                    progress_callback,
                     vision_settings,
                     text_provider,
                     text_settings,
@@ -236,50 +247,17 @@ class ScriptGenerator:
         )
 
         progress_callback(60, "正在整理分析结果...")
-        
-        # 合并所有批次的分析结果
-        frame_analysis = ""
-        prev_batch_files = None
 
-        for result in results:
-            if 'error' in result:
-                logger.warning(f"批次 {result['batch_index']} 处理出现警告: {result['error']}")
-                continue
-                
-            batch_files = self._get_batch_files(keyframe_files, result, vision_batch_size)
-            first_timestamp, last_timestamp, _ = self._get_batch_timestamps(batch_files, prev_batch_files)
-            
-            # 添加带时间戳的分��结果
-            frame_analysis += f"\n=== {first_timestamp}-{last_timestamp} ===\n"
-            frame_analysis += result['response']
-            frame_analysis += "\n"
-            
-            prev_batch_files = batch_files
-        
+        frame_analysis, frame_content_list = self._prepare_frame_contents(
+            keyframe_files,
+            results,
+            vision_batch_size,
+        )
+
         if not frame_analysis.strip():
             raise Exception("未能生成有效的帧分析结果")
-        
+
         progress_callback(70, "正在生成脚本...")
-
-        # 构建帧内容列表
-        frame_content_list = []
-        prev_batch_files = None
-
-        for result in results:
-            if 'error' in result:
-                continue
-            
-            batch_files = self._get_batch_files(keyframe_files, result, vision_batch_size)
-            _, _, timestamp_range = self._get_batch_timestamps(batch_files, prev_batch_files)
-            
-            frame_content = {
-                "timestamp": timestamp_range,
-                "picture": result['response'],
-                "narration": "",
-                "OST": 2
-            }
-            frame_content_list.append(frame_content)
-            prev_batch_files = batch_files
 
         if not frame_content_list:
             raise Exception("没有有效的帧内容可以处理")
@@ -318,6 +296,83 @@ class ScriptGenerator:
                 prompt=custom_prompt,
                 video_theme=video_theme
             )
+
+        return processor.process_frames(frame_content_list)
+
+    async def _process_with_siliconflow(
+        self,
+        keyframe_files: List[str],
+        video_theme: str,
+        custom_prompt: str,
+        vision_batch_size: int,
+        progress_callback: Callable[[float, str], None],
+        vision_settings: Optional[Dict[str, Any]] = None,
+        text_provider: Optional[str] = None,
+        text_settings: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """使用硅基流动处理视频帧"""
+
+        if vision_settings is None:
+            raise ValueError("缺少硅基流动视觉配置")
+
+        progress_callback(30, "正在初始化视觉分析器...")
+
+        from app.services.llm.providers.siliconflow_provider import SiliconflowVisionProvider
+
+        analyzer = SiliconflowVisionProvider(
+            api_key=vision_settings.get("api_key"),
+            model_name=vision_settings.get("model_name"),
+            base_url=vision_settings.get("base_url"),
+        )
+
+        progress_callback(40, "正在分析关键帧...")
+
+        results = await analyzer.analyze_images(
+            images=keyframe_files,
+            prompt=config.app.get('vision_analysis_prompt'),
+            batch_size=vision_batch_size,
+        )
+
+        progress_callback(60, "正在整理分析结果...")
+
+        frame_analysis, frame_content_list = self._prepare_frame_contents(
+            keyframe_files,
+            results,
+            vision_batch_size,
+        )
+
+        if not frame_analysis.strip():
+            raise Exception("未能生成有效的帧分析结果")
+
+        if not frame_content_list:
+            raise Exception("没有有效的帧内容可以处理")
+
+        progress_callback(70, "正在生成脚本...")
+
+        if text_settings is None:
+            if text_provider:
+                text_provider_name, text_key = self._normalize_provider(text_provider)
+                text_settings = self._validate_provider_config(
+                    text_key,
+                    category="text",
+                    original_name=text_provider_name,
+                )
+            else:
+                raise ValueError("缺少文本模型配置")
+
+        text_api_key = text_settings.get('api_key')
+        text_model = text_settings.get('model_name')
+        text_base_url = text_settings.get('base_url')
+
+        progress_callback(90, "正在生成文案...")
+
+        processor = ScriptProcessor(
+            model_name=text_model,
+            api_key=text_api_key,
+            base_url=text_base_url,
+            prompt=custom_prompt,
+            video_theme=video_theme
+        )
 
         return processor.process_frames(frame_content_list)
 
@@ -505,6 +560,60 @@ class ScriptGenerator:
             f"{provider} 配置缺失: {readable}。"
             "请在 config.toml 的对应 app 节中补全后重试。"
         )
+
+    def _prepare_frame_contents(
+        self,
+        keyframe_files: List[str],
+        results: List[Dict[str, Any]],
+        vision_batch_size: int,
+    ) -> tuple[str, List[Dict[str, Any]]]:
+        """整理视觉分析结果并构建帧内容列表"""
+
+        frame_analysis_lines: List[str] = []
+        frame_content_list: List[Dict[str, Any]] = []
+        prev_batch_files: Optional[List[str]] = None
+
+        for idx, raw_result in enumerate(results or []):
+            if isinstance(raw_result, dict):
+                result = dict(raw_result)
+            else:
+                # 将字符串结果标准化为字典结构，兼容不同提供商的返回格式
+                text = str(raw_result)
+                if text.strip().startswith("批次处理失败"):
+                    result = {"batch_index": idx, "error": text}
+                else:
+                    result = {"batch_index": idx, "response": text}
+
+            if 'error' in result:
+                logger.warning(f"批次 {result.get('batch_index', idx)} 处理出现警告: {result['error']}")
+                continue
+
+            if 'batch_index' not in result or not isinstance(result['batch_index'], int):
+                result['batch_index'] = idx
+
+            response_text = result.get('response')
+            if not response_text:
+                logger.warning(f"批次 {result['batch_index']} 返回空响应，已跳过")
+                continue
+
+            batch_files = self._get_batch_files(keyframe_files, result, vision_batch_size)
+            first_timestamp, last_timestamp, timestamp_range = self._get_batch_timestamps(batch_files, prev_batch_files)
+
+            frame_analysis_lines.append(
+                f"\n=== {first_timestamp}-{last_timestamp} ===\n{response_text}\n"
+            )
+
+            frame_content_list.append({
+                "timestamp": timestamp_range,
+                "picture": response_text,
+                "narration": "",
+                "OST": 2
+            })
+
+            prev_batch_files = batch_files
+
+        frame_analysis = "".join(frame_analysis_lines)
+        return frame_analysis, frame_content_list
 
     def _get_batch_files(
         self,
