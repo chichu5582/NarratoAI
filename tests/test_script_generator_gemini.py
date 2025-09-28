@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.config import config
-from app.services.script_service import ScriptGenerator
+from app.services.script_generator import ScriptGenerator
 
 
 class ProcessWithGeminiTests(unittest.IsolatedAsyncioTestCase):
@@ -16,7 +16,7 @@ class ProcessWithGeminiTests(unittest.IsolatedAsyncioTestCase):
             captured_kwargs = {}
 
             with patch(
-                "app.services.script_service.video_processor.VideoProcessor"
+                "app.services.script_generator.video_processor.VideoProcessor"
             ) as MockProcessor:
                 instance = MockProcessor.return_value
 
@@ -46,7 +46,7 @@ class ProcessWithGeminiTests(unittest.IsolatedAsyncioTestCase):
             video_path.write_bytes(b"fake video content")
 
             with patch(
-                "app.services.script_service.utils.temp_dir",
+                "app.services.script_generator.utils.temp_dir",
                 return_value=tmp_dir,
             ):
                 generator = ScriptGenerator()
@@ -110,13 +110,13 @@ class ProcessWithGeminiTests(unittest.IsolatedAsyncioTestCase):
             },
             clear=False,
         ), patch(
-            "app.services.script_service.gemini_analyzer.VisionAnalyzer",
+            "app.services.script_generator.gemini_analyzer.VisionAnalyzer",
             side_effect=AssertionError("Should not instantiate VisionAnalyzer"),
         ), patch(
             "app.utils.gemini_openai_analyzer.GeminiOpenAIAnalyzer",
             DummyAnalyzer,
         ), patch(
-            "app.services.script_service.ScriptProcessor",
+            "app.services.script_generator.ScriptProcessor",
             DummyProcessor,
         ):
             result = await generator._process_with_gemini(
