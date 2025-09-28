@@ -35,7 +35,7 @@ class ScriptGenerator:
             video_theme: 视频主题
             custom_prompt: 自定义提示词
             skip_seconds: 跳过开始的秒数
-            threshold: 差异���值
+            threshold: 差异阈值
             vision_batch_size: 视觉处理批次大小
             vision_llm_provider: 视觉模型提供商
             progress_callback: 进度回调函数

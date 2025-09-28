@@ -14,7 +14,7 @@ from loguru import logger
 from app.config import config
 from app.models.schema import VideoClipParams
 from app.services import task
-from app.services.script_service import ScriptGenerator
+from app.services.script_generator import ScriptGenerator
 from app.utils import utils
 
 ProgressCallback = Optional[Callable[[float, str], None]]
