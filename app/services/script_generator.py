@@ -429,18 +429,23 @@ class ScriptGenerator:
         if not normalized:
             return "gemini", "gemini"
 
+        # 归一化提供商名称，便于匹配不同的书写格式
+        canonical = normalized.replace(" ", "").replace("-", "_")
+        canonical_no_paren = canonical.replace("(", "").replace(")", "")
+
         alias_map = {
             "gemini(openai)": ("gemini(openai)", "gemini"),
-            "gemini-openai": ("gemini(openai)", "gemini"),
             "gemini_openai": ("gemini(openai)", "gemini"),
+            "geminiopenai": ("gemini(openai)", "gemini"),
         }
 
-        if normalized in alias_map:
-            return alias_map[normalized]
+        if canonical in alias_map:
+            return alias_map[canonical]
 
-        config_key = normalized.replace(" ", "").replace("-", "_")
-        config_key = config_key.replace("(", "").replace(")", "")
-        return normalized, config_key
+        if canonical_no_paren in alias_map:
+            return alias_map[canonical_no_paren]
+
+        return normalized, canonical_no_paren
 
     def _validate_provider_config(
         self,

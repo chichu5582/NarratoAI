@@ -68,10 +68,10 @@ class ProcessWithGeminiTests(unittest.IsolatedAsyncioTestCase):
         ]
 
         class DummyAnalyzer:
-            instantiated = False
+            instantiated = 0
 
             def __init__(self, model_name, api_key, base_url):
-                DummyAnalyzer.instantiated = True
+                DummyAnalyzer.instantiated += 1
                 self.model_name = model_name
                 self.api_key = api_key
                 self.base_url = base_url
@@ -91,10 +91,7 @@ class ProcessWithGeminiTests(unittest.IsolatedAsyncioTestCase):
             def process_frames(self, frame_content_list):
                 return frame_content_list
 
-        progress_events = []
-
-        def progress_callback(progress, message):
-            progress_events.append((progress, message))
+        provider_variants = ["gemini(openai)", "Gemini (OpenAI)"]
 
         with patch.dict(
             config.app,
@@ -119,19 +116,26 @@ class ProcessWithGeminiTests(unittest.IsolatedAsyncioTestCase):
             "app.services.script_generator.ScriptProcessor",
             DummyProcessor,
         ):
-            result = await generator._process_with_gemini(
-                keyframe_files=fake_frames,
-                video_theme="Adventure",
-                custom_prompt="",
-                vision_batch_size=2,
-                progress_callback=progress_callback,
-                vision_provider="gemini(openai)",
-            )
+            for provider in provider_variants:
+                progress_events = []
 
-        self.assertTrue(DummyAnalyzer.instantiated)
-        self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["picture"], "analysis")
-        self.assertGreaterEqual(len(progress_events), 3)
+                def progress_callback(progress, message):
+                    progress_events.append((progress, message))
+
+                result = await generator._process_with_gemini(
+                    keyframe_files=fake_frames,
+                    video_theme="Adventure",
+                    custom_prompt="",
+                    vision_batch_size=2,
+                    progress_callback=progress_callback,
+                    vision_provider=provider,
+                )
+
+                self.assertEqual(len(result), 1)
+                self.assertEqual(result[0]["picture"], "analysis")
+                self.assertGreaterEqual(len(progress_events), 3)
+
+        self.assertEqual(DummyAnalyzer.instantiated, len(provider_variants))
 
 
 if __name__ == "__main__":
